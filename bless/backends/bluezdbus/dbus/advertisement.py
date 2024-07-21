@@ -64,6 +64,7 @@ class BlueZLEAdvertisement(ServiceInterface):
         self._min_interval: int = 100  # in ms, range [20ms, 10,485s]
         self._max_interval: int = 100  # in ms, range [20ms, 10,485s]
         self._tx_power: int = 20  # range [-127 to +20]
+        self._discoverable = True
 
         self._local_name = app.app_name
 
@@ -121,6 +122,14 @@ class BlueZLEAdvertisement(ServiceInterface):
     # @Includes.setter
     # def Includes(self, include): # type: ignore # noqa: F821
     #     pass
+
+    @dbus_property()
+    def Discoverable(self) -> "b":  # type: ignore # noqa: F821 N802
+        return self._discoverable
+
+    @Discoverable.setter  # type: ignore
+    def Discoverable(self, discoverable: "b"):  # type: ignore # noqa: F821 N802
+        self._discoverable = discoverable
 
     @dbus_property()
     def TxPower(self) -> "n":  # type: ignore # noqa: F821 N802

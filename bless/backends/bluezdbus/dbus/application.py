@@ -1,11 +1,13 @@
 import re
 
+import asyncio
 import bleak.backends.bluezdbus.defs as defs  # type: ignore
 
 from typing import List, Any, Callable, Optional, Union
 
+from dbus_next.message import MessageType, Message  # type: ignore
 from dbus_next.aio import MessageBus, ProxyObject, ProxyInterface  # type: ignore
-from dbus_next.service import ServiceInterface  # type: ignore
+from dbus_next.service import ServiceInterface, method, signal  # type: ignore
 from dbus_next.signature import Variant  # type: ignore
 
 from bless.backends.bluezdbus.dbus.advertisement import (  # type: ignore
@@ -17,6 +19,7 @@ from bless.backends.bluezdbus.dbus.characteristic import (  # type: ignore
     Flags,
     BlueZGattCharacteristic,
 )
+from bless.backends.bluezdbus.dbus.utils import get_adapter, find_adapter
 
 
 class BlueZGattApplication(ServiceInterface):
@@ -73,6 +76,8 @@ class BlueZGattApplication(ServiceInterface):
         BlueZGattService
             Returns and instance of the service object
         """
+        self.adapter = await get_adapter(self.bus)
+
         index: int = len(self.services) + 1
         primary: bool = index == 1
         service: BlueZGattService = BlueZGattService(uuid, primary, index, self)
@@ -124,6 +129,8 @@ class BlueZGattApplication(ServiceInterface):
         await iface.call_set(  # type: ignore
             "org.bluez.Adapter1", "Alias", Variant("s", name)
         )
+                             
+
 
     async def register(self, adapter: ProxyObject):
         """
@@ -167,11 +174,54 @@ class BlueZGattApplication(ServiceInterface):
 
         # Only add the first UUID
         advertisement._service_uuids.append(self.services[0].UUID)
+        #print("BLESS: start_advertising")
+        advertisement.Discoverable = True
 
         self.bus.export(advertisement.path, advertisement)
 
         iface: ProxyInterface = adapter.get_interface("org.bluez.LEAdvertisingManager1")
         await iface.call_register_advertisement(advertisement.path, {})  # type: ignore
+	
+        await self.monitor_connections()
+
+    async def set_trust_level(self, device_path):
+        message = Message(
+            destination='org.bluez',
+            path=device_path,
+            interface='org.freedesktop.DBus.Properties',
+            member='Set',
+            signature='ssv',
+            body=['org.bluez.Device1', 'Trusted', Variant('b', True)]
+        )
+        reply = await self.bus.call(message)
+        if reply.message_type == MessageType.ERROR:
+            print(f"Error setting trust level: {reply.error_name} - {reply.body}")
+        #print(f"* * *set trust level path={device_path}, reply={reply.message_type} - {reply.body}")
+
+
+
+    async def monitor_connections(self):
+        # Add a match rule to listen for PropertiesChanged signals on org.bluez.Device1
+        rule = "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'"
+        #print("bus=", self.bus)
+        self.bus._add_match_rule(rule)
+        self.bus.add_message_handler(self.on_properties_changed)
+
+    def on_properties_changed(self, message):
+        if message.message_type != MessageType.SIGNAL:
+            return
+
+        interface_name = message.body[0]
+        changed_properties = message.body[1]
+        path = message.path
+
+        #print("PATH:", path)
+        #print(f"iface_name={interface_name} changed_props={changed_properties}")
+        if interface_name == 'org.bluez.Device1' and 'ServicesResolved' in changed_properties:
+            if changed_properties['ServicesResolved'].value:
+                # Device connected
+                #print("Device connected")
+                asyncio.create_task(self.set_trust_level(path))
 
     async def is_advertising(self, adapter: ProxyObject) -> bool:
         """
